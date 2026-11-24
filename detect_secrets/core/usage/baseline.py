@@ -28,6 +28,12 @@ def parse_args(args: argparse.Namespace) -> None:
     try:
         args.baseline_filename = args.baseline[0]
         args.baseline_version = loaded_baseline['version']
-        args.baseline = baseline.load(loaded_baseline, filename=args.baseline_filename)
+        args.baseline = baseline.load(
+            loaded_baseline,
+            filename=args.baseline_filename,
+            allow_incomplete=getattr(args, 'allow_incomplete_baseline', False),
+        )
     except KeyError:
         raise argparse.ArgumentTypeError('Invalid baseline.')
+    except baseline.IncompleteBaselineError as e:
+        raise argparse.ArgumentTypeError(str(e))

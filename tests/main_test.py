@@ -89,21 +89,19 @@ class TestSlimScan:
 
             assert 'generated_at' not in printer.message
             assert 'line_number' not in printer.message
+            assert json.loads(printer.message)['slim'] is True
 
     @staticmethod
-    def test_restores_line_numbers():
+    def test_full_baseline_restores_line_numbers():
         with mock_named_temporary_file(mode='w+') as f, redirect_stdout(f):
             file_a = str(Path('test_data/config.env'))
             file_b = str(Path('test_data/config.md'))
 
-            main_module.main(['scan', '--slim', file_a])
+            # A complete (non-slim) baseline can be used to continue subsequent scans.
+            main_module.main(['scan', file_a])
 
             f.seek(0)
-            main_module.main([
-                'scan',
-                '--slim', file_a, file_b,
-                '--baseline', f.name,
-            ])
+            main_module.main(['scan', '--slim', file_a, file_b, '--baseline', f.name])
 
             f.seek(0)
             secrets = baseline.load(baseline.load_from_file(f.name))
@@ -114,6 +112,40 @@ class TestSlimScan:
             # Make sure they both have line numbers
             assert list(secrets[file_a])[0].line_number
             assert list(secrets[file_b])[0].line_number
+
+    @staticmethod
+    def test_rejects_slim_baseline_as_full_baseline():
+        # A slim output is only a slice of the results: accepting it as a baseline for a
+        # new scan would silently drop previously recorded exclusions.
+        with mock_named_temporary_file(mode='w+') as f, redirect_stdout(f):
+            main_module.main(['scan', '--slim', 'test_data/config.env'])
+
+            f.seek(0)
+            with pytest.raises(SystemExit):
+                main_module.main([
+                    'scan',
+                    'test_data/config.md',
+                    '--baseline', f.name,
+                ])
+
+    @staticmethod
+    def test_legacy_baseline_without_marker_is_treated_as_complete():
+        # Baselines produced before the marker existed must keep loading as complete files,
+        # rather than being mistaken for corrupt or incomplete ones.
+        with transient_settings({
+            'plugins_used': [
+                {
+                    'name': 'Base64HighEntropyString',
+                    'limit': 4.5,
+                },
+            ],
+        }):
+            secrets = SecretsCollection()
+            secrets.scan_file('test_data/config.env')
+            data = baseline.format_for_output(secrets)
+
+        assert 'slim' not in data
+        assert baseline.load(data).files
 
 
 class TestScanString:

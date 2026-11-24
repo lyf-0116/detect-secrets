@@ -86,6 +86,11 @@ class ParserBuilder:
         return self
 
     def add_pre_commit_arguments(self) -> 'ParserBuilder':
+        # The pre-commit hook only diffs staged changes against the baseline, so it is
+        # safe to run against a slim (incomplete) baseline. It must not, however, rewrite
+        # such a baseline with a full set of results.
+        self._parser.set_defaults(allow_incomplete_baseline=True)
+
         self._parser.add_argument(
             'filenames',
             nargs='*',

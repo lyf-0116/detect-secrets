@@ -8,6 +8,7 @@ from unittest import mock
 import pytest
 
 from detect_secrets.core import baseline
+from detect_secrets.exceptions import IncompleteBaselineError
 from detect_secrets.settings import get_settings
 from detect_secrets.util.path import get_relative_path_if_in_cwd
 from testing.mocks import mock_named_temporary_file
@@ -138,3 +139,58 @@ def test_upgrade_succeeds():
 
     assert new_baseline     # assert *something* exists
     assert current_baseline != new_baseline
+
+
+def test_slim_output_is_self_marked_as_incomplete():
+    secrets = baseline.create('test_data/files')
+
+    full_output = baseline.format_for_output(secrets)
+    slim_output = baseline.format_for_output(secrets, is_slim_mode=True)
+
+    assert baseline.SLIM_BASELINE_KEY not in full_output
+    assert slim_output[baseline.SLIM_BASELINE_KEY] is True
+    assert baseline.is_slim_baseline(slim_output)
+    assert not baseline.is_slim_baseline(full_output)
+
+
+def test_load_rejects_slim_baseline_by_default():
+    secrets = baseline.create('test_data/files')
+    slim_output = baseline.format_for_output(secrets, is_slim_mode=True)
+
+    with pytest.raises(IncompleteBaselineError):
+        baseline.load(slim_output)
+
+
+def test_load_allows_slim_baseline_when_explicitly_permitted():
+    secrets = baseline.create('test_data/files')
+    slim_output = baseline.format_for_output(secrets, is_slim_mode=True)
+
+    loaded = baseline.load(slim_output, allow_incomplete=True)
+    assert loaded.files == secrets.files
+
+
+def test_legacy_baseline_without_marker_loads_as_complete():
+    with open('.secrets.baseline') as f:
+        legacy_baseline = json.loads(f.read())
+
+    assert baseline.SLIM_BASELINE_KEY not in legacy_baseline
+    assert not baseline.is_slim_baseline(legacy_baseline)
+    assert baseline.load(legacy_baseline, '.secrets.baseline').files
+
+
+def test_slim_marker_survives_upgrade():
+    secrets = baseline.create('test_data/files')
+    slim_output = baseline.format_for_output(secrets, is_slim_mode=True)
+    slim_output['version'] = '0.0.1'
+    # Simulate the pre-1.0 plugin field names, so the upgrade chain has work to do.
+    for plugin in slim_output['plugins_used']:
+        if plugin['name'] == 'Base64HighEntropyString':
+            plugin['base64_limit'] = plugin.pop('limit')
+        elif plugin['name'] == 'HexHighEntropyString':
+            plugin['hex_limit'] = plugin.pop('limit')
+
+    upgraded = baseline.upgrade(slim_output)
+    assert upgraded[baseline.SLIM_BASELINE_KEY] is True
+
+    with pytest.raises(IncompleteBaselineError):
+        baseline.load(upgraded)

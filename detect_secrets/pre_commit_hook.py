@@ -52,6 +52,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     if is_modified:
+        with open(args.baseline_filename) as f:
+            was_slim_baseline = baseline.is_slim_baseline(json.loads(f.read()))
+
+        output = args.baseline
         if args.baseline_version != VERSION:
             with open(args.baseline_filename) as f:
                 old_baseline = json.loads(f.read())
@@ -59,9 +63,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             # Override the results, because this has been updated in `should_update_baseline`.
             old_baseline['results'] = args.baseline.json()
 
-            args.baseline = baseline.upgrade(old_baseline)
+            output = baseline.upgrade(old_baseline)
 
-        baseline.save_to_file(args.baseline, filename=args.baseline_filename)
+        # Preserve the self-describing marker: a slim baseline on disk must stay a slim
+        # baseline after this hook rewrites it, otherwise it would masquerade as a
+        # complete baseline and silently drop exclusion records on the next `scan`.
+        if was_slim_baseline:
+            output[baseline.SLIM_BASELINE_KEY] = True
+
+        baseline.save_to_file(output, filename=args.baseline_filename)
         print(
             'The baseline file was updated.\n'
             'Probably to keep line numbers of secrets up-to-date.\n'

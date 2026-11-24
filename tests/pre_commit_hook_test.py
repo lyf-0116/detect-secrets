@@ -163,7 +163,29 @@ class TestModifiesBaselineFromVersionChange:
             ])
 
             f.seek(0)
-            assert b'line_number' not in f.read()
+            data = json.loads(f.read())
+            assert b'line_number' not in json.dumps(data).encode()
+
+            # The rewritten file must still declare itself as slim, rather than
+            # masquerading as a complete baseline.
+            assert data[baseline.SLIM_BASELINE_KEY] is True
+
+    def test_accepts_slim_baseline_for_diffing(self):
+        # The pre-commit hook can safely operate on a slice, since it only diffs the
+        # staged changes against the baseline.
+        with self.get_baseline_file(
+            formatter=partial(baseline.format_for_output, is_slim_mode=True),
+        ) as f:
+            # The fixture pins the baseline to an old version, so the hook also reports
+            # the version-updated baseline (exit code 3) instead of failing to parse it.
+            assert_commit_blocked_with_diff_exit_code([
+                'test_data/files/file_with_no_secrets.py',
+                '--baseline',
+                f.name,
+            ])
+
+            f.seek(0)
+            assert json.loads(f.read())[baseline.SLIM_BASELINE_KEY] is True
 
     @contextmanager
     def get_baseline_file(self, formatter=baseline.format_for_output):
@@ -206,6 +228,11 @@ class TestLineNumberChanges:
                 '--baseline',
                 f.name,
             ])
+
+            # A current-version slim baseline is accepted for diffing, and left untouched
+            # (still self-marked as incomplete) on disk.
+            f.seek(0)
+            assert json.loads(f.read())[baseline.SLIM_BASELINE_KEY] is True
 
     @pytest.fixture
     def modified_baseline(self):

@@ -27,6 +27,8 @@ from . import io
 from ..core import baseline
 from ..core.potential_secret import PotentialSecret
 from ..core.secrets_collection import SecretsCollection
+from ..exceptions import IncompleteBaselineError
+from ..exceptions import InvalidBaselineError
 from ..exceptions import NoLineNumberError
 from ..exceptions import SecretNotFoundOnSpecifiedLineError
 from ..settings import transient_settings
@@ -64,7 +66,11 @@ def _get_baseline_from_file(filename: str) -> Tuple[SecretsCollection, Dict[str,
         'filters_used': [] if 'filters_used' not in data else data['filters_used'],
     }
 
-    return baseline.load(data, filename), config
+    try:
+        return baseline.load(data, filename), config
+    except IncompleteBaselineError as e:
+        io.print_error(str(e))
+        raise InvalidBaselineError
 
 
 def _compare_baselines(

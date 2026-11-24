@@ -8,6 +8,24 @@ class InvalidBaselineError(ValueError):
     pass
 
 
+class IncompleteBaselineError(InvalidBaselineError):
+    """
+    Raised when a slim (incomplete) baseline is used in a context that requires a
+    complete baseline. Slim baselines only describe a slice of the scanned results,
+    so silently treating them as full baselines would drop previously recorded
+    exclusions (e.g. secrets labelled as false positives).
+    """
+    def __init__(self, filename: str = '') -> None:
+        location = f' ({filename})' if filename else ''
+        super().__init__(
+            'Refusing to use a slim baseline as a complete baseline{}: slim baselines '
+            'only contain a slice of the scanned results and are missing exclusion '
+            'records. Recreate a full baseline (without `--slim`) and try again.'.format(
+                location,
+            ),
+        )
+
+
 class InvalidFile(ValueError):
     """Think of this as a 400, if FileNotFoundError was a 404 HTTPError code."""
     pass

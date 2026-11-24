@@ -81,8 +81,9 @@ def _add_initialize_baseline_options(parser: argparse.ArgumentParser) -> None:
         action='store_true',
         help=(
             'Slim baselines are created with the intention of minimizing differences between '
-            'commits. However, they are not compatible with the `audit` functionality, and '
-            'slim baselines will need to be remade to be audited.'
+            'commits. They are self-marked as incomplete, so they cannot be used as a full '
+            'baseline for another `scan` or with the `audit` functionality, and will need to '
+            'be remade to be audited. The pre-commit hook still accepts them.'
         ),
     )
 

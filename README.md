@@ -274,8 +274,10 @@ scan options:
                         provided, it will always use the latest plugins
   --slim                Slim baselines are created with the intention of
                         minimizing differences between commits. However, they
-                        are not compatible with the `audit` functionality, and
-                        slim baselines will need to be remade to be audited.
+                        are self-marked as incomplete, so they cannot be used
+                        as a full baseline for another `scan` or with the
+                        `audit` functionality, and will need to be remade to
+                        be audited. The pre-commit hook still accepts them.
 
 plugin options:
   Configure settings for each secret scanning ruleset. By default, all

@@ -25,6 +25,14 @@ If you love `detect-secrets`, please star our project on GitHub to show your sup
 [@xxxx]: https://github.com/xxxx
 -->
 
+#### :bug: Bugfixes
+- Slim baselines (`scan --slim`) now carry a self-describing `"slim": true` marker.
+  They are rejected when used as a complete baseline by `scan` or `audit`, preventing
+  previously recorded exclusions (e.g. secrets labelled as false positives) from being
+  silently dropped. The pre-commit hook still accepts slim baselines, and preserves the
+  marker when it rewrites one. Baselines without the marker continue to be treated as
+  complete, so older files remain compatible.
+
 ### v1.5.0
 ##### May 6th, 2024
 
