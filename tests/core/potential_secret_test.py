@@ -1,6 +1,7 @@
 import pytest
 
 from detect_secrets.core.potential_secret import PotentialSecret
+from detect_secrets.core.potential_secret import UNKNOWN_RULE
 from testing.factories import potential_secret_factory
 
 
@@ -22,6 +23,16 @@ from testing.factories import potential_secret_factory
             potential_secret_factory(secret='B'),
             False,
         ),
+        (
+            potential_secret_factory(rule='ruleA'),
+            potential_secret_factory(rule='ruleB'),
+            False,
+        ),
+        (
+            potential_secret_factory(rule='ruleA'),
+            potential_secret_factory(rule='ruleA'),
+            True,
+        ),
     ],
 )
 def test_equality(a, b, is_equal):
@@ -42,6 +53,11 @@ def test_json():
         assert value != 'blah'
 
 
+def test_json_includes_rule_when_present():
+    secret = potential_secret_factory(rule='some-rule')
+    assert secret.json()['rule'] == 'some-rule'
+
+
 @pytest.mark.parametrize(
     'kwargs',
     (
@@ -58,8 +74,27 @@ def test_load_secret_from_dict(kwargs):
     secret = potential_secret_factory(**kwargs)
     new_secret = PotentialSecret.load_secret_from_dict(secret.json())
 
-    assert secret == new_secret
+    assert new_secret.secret_hash == secret.secret_hash
+    assert new_secret.type == secret.type
+    assert new_secret.filename == secret.filename
     assert new_secret.secret_value is None
+
+
+def test_load_secret_from_dict_marks_missing_rule_as_unknown():
+    secret = potential_secret_factory()
+    assert 'rule' not in secret.json()
+
+    new_secret = PotentialSecret.load_secret_from_dict(secret.json())
+
+    assert new_secret.rule == UNKNOWN_RULE
+
+
+def test_load_secret_from_dict_preserves_rule():
+    secret = potential_secret_factory(rule='some-rule')
+    new_secret = PotentialSecret.load_secret_from_dict(secret.json())
+
+    assert new_secret == secret
+    assert new_secret.rule == 'some-rule'
 
 
 def test_stringify():

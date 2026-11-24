@@ -52,9 +52,16 @@ We can see that the JSON dump clearly shows this.
     "line_number": 5,
     "hashed_secret": "bc9160bc0ff062e1b2d21d2e59f6ebaba104f051",
     "is_secret": false,
-    "is_verified": true
+    "is_verified": true,
+    "rule": "Base64HighEntropyString"
 }
 ```
+
+The `rule` field identifies which of the plugin's rules produced this hit (e.g. the regex
+pattern that matched, for regex-based plugins), so that each determination can be tracked
+independently. Entries in baselines written before this field existed are marked with
+`"rule": "unknown"` when loaded, and are matched to fresh scan results by content and
+plugin alone.
 
 However, since it is designed for easy reading, we didn't want the baseline to be the single
 file that contained all the secrets in a given repository. Therefore, we mask the secret by

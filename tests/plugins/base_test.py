@@ -6,9 +6,12 @@ import requests
 from detect_secrets.constants import VerifiedResult
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
 from detect_secrets.plugins.base import BasePlugin
+from detect_secrets.plugins.keyword import KeywordDetector
+from detect_secrets.plugins.keyword import QUOTES_REQUIRED_DENYLIST_REGEX_TO_GROUP
 from detect_secrets.settings import get_settings
 from detect_secrets.util.code_snippet import CodeSnippet
 from detect_secrets.util.code_snippet import get_code_snippet
+from testing.plugins import HippoDetector
 
 
 def test_ensure_all_plugins_have_unique_secret_types():
@@ -110,3 +113,41 @@ class TestAnalyzeLine():
         get_settings().disable_filters(
             'detect_secrets.filters.common.is_ignored_due_to_verification_policies',
         )
+
+
+class TestRuleProvenance:
+    def test_regex_based_plugin_uses_pattern_as_rule(self):
+        plugin = HippoDetector()
+        output = plugin.analyze_line(
+            filename='animals.txt',
+            line='hippo',
+            line_number=1,
+        )
+
+        secret = list(output)[0]
+        assert secret.rule == HippoDetector.denylist[0].pattern
+
+    def test_single_rule_plugin_uses_class_name_as_rule(self):
+        plugin = MockPlugin(VerifiedResult.UNVERIFIED)
+        output = plugin.analyze_line(
+            filename='secrets.py',
+            line='some-secret',
+            line_number=1,
+        )
+
+        secret = list(output)[0]
+        assert secret.rule == 'MockPlugin'
+
+    def test_keyword_detector_uses_matched_regex_as_rule(self):
+        plugin = KeywordDetector()
+        output = plugin.analyze_line(
+            filename='config.env',
+            line='api_key = "hunter2"',
+            line_number=1,
+        )
+
+        secret = list(output)[0]
+        assert secret.rule in {
+            regex.pattern
+            for regex in QUOTES_REQUIRED_DENYLIST_REGEX_TO_GROUP
+        }

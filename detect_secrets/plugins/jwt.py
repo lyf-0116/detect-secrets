@@ -4,7 +4,9 @@ This plugin finds JWT tokens
 import base64
 import json
 import re
+from typing import Any
 from typing import Generator
+from typing import Tuple
 
 from .base import RegexBasedDetector
 
@@ -20,6 +22,16 @@ class JwtTokenDetector(RegexBasedDetector):
         yield from filter(
             self.is_formally_valid,
             super().analyze_string(string),
+        )
+
+    def analyze_string_with_rule(
+        self,
+        string: str,
+        **kwargs: Any,
+    ) -> Generator[Tuple[str, str], None, None]:
+        yield from filter(
+            lambda result: self.is_formally_valid(result[1]),
+            super().analyze_string_with_rule(string, **kwargs),
         )
 
     @staticmethod

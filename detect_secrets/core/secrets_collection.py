@@ -1,3 +1,4 @@
+import copy
 import multiprocessing as mp
 import os
 from collections import defaultdict
@@ -12,6 +13,7 @@ from typing import Tuple
 from . import scan
 from ..util.path import convert_local_os_path
 from .potential_secret import PotentialSecret
+from .potential_secret import UNKNOWN_RULE
 from detect_secrets.settings import configure_settings_from_baseline
 from detect_secrets.settings import get_settings
 
@@ -110,16 +112,30 @@ class SecretsCollection:
             }
 
             for old_secret in old_results.data[filename]:
-                if old_secret not in mapping:
-                    continue
+                if old_secret in mapping:
+                    matches = [mapping[old_secret]]
+                elif old_secret.rule == UNKNOWN_RULE:
+                    # Secrets loaded from older baselines don't know which rule
+                    # produced them, so they can't be matched on rule identity.
+                    # Fall back to matching on content and plugin (type) alone,
+                    # so that manual labels survive the baseline format upgrade.
+                    matches = [
+                        secret
+                        for secret in self.data[filename]
+                        if secret.secret_hash == old_secret.secret_hash
+                        and secret.type == old_secret.type
+                    ]
+                else:
+                    matches = []
 
-                # Only override if there's no newer value.
-                if mapping[old_secret].is_secret is None:
-                    mapping[old_secret].is_secret = old_secret.is_secret
+                for secret in matches:
+                    # Only override if there's no newer value.
+                    if secret.is_secret is None:
+                        secret.is_secret = old_secret.is_secret
 
-                # If the old value is false, it won't make a difference.
-                if not mapping[old_secret].is_verified:
-                    mapping[old_secret].is_verified = old_secret.is_verified
+                    # If the old value is false, it won't make a difference.
+                    if not secret.is_verified:
+                        secret.is_verified = old_secret.is_verified
 
     def trim(
         self,
@@ -170,13 +186,41 @@ class SecretsCollection:
 
             # We construct this so we can get O(1) retrieval of secrets.
             existing_secret_map = {secret: secret for secret in self[filename]}
+
+            # Secrets loaded from older baselines don't know which rule produced
+            # them, so index them by content and plugin (type) alone.
+            unknown_rule_secrets = {
+                (secret.secret_hash, secret.type): secret
+                for secret in self[filename]
+                if secret.rule == UNKNOWN_RULE
+            }
+            migrated_secrets: Set[PotentialSecret] = set()
+
             for secret in scanned_results[filename]:
-                if secret not in existing_secret_map:
+                existing_secret = existing_secret_map.get(secret)
+                if existing_secret is None:
+                    legacy_secret = unknown_rule_secrets.get(
+                        (secret.secret_hash, secret.type),
+                    )
+                    if legacy_secret is not None:
+                        if legacy_secret not in migrated_secrets:
+                            # Migrate the legacy entry to the new format by
+                            # adopting the rule reported by the latest scan.
+                            legacy_secret.rule = secret.rule
+                            migrated_secrets.add(legacy_secret)
+                            existing_secret = legacy_secret
+                        else:
+                            # A single legacy entry can correspond to multiple
+                            # rules in the new format. Split it, so that each
+                            # rule-level hit retains the labels of the original.
+                            existing_secret = copy.copy(legacy_secret)
+                            existing_secret.rule = secret.rule
+
+                if existing_secret is None:
                     continue
 
                 # Currently, we assume that the `scanned_results` have no labelled data, so
                 # we only want to obtain the latest line number from it.
-                existing_secret = existing_secret_map[secret]
                 if existing_secret.line_number:
                     # Only update line numbers if we're tracking them.
                     existing_secret.line_number = secret.line_number
@@ -251,10 +295,12 @@ class SecretsCollection:
 
         for filename in self.files:
             self_mapping = {
-                (secret.secret_hash, secret.type): secret for secret in self[filename]
+                (secret.secret_hash, secret.type, secret.rule): secret
+                for secret in self[filename]
             }
             other_mapping = {
-                (secret.secret_hash, secret.type): secret for secret in other[filename]
+                (secret.secret_hash, secret.type, secret.rule): secret
+                for secret in other[filename]
             }
 
             # Since PotentialSecret is hashable, we compare their identities through this.
@@ -265,7 +311,7 @@ class SecretsCollection:
                 continue
 
             for secretA in self_mapping.values():
-                secretB = other_mapping[(secretA.secret_hash, secretA.type)]
+                secretB = other_mapping[(secretA.secret_hash, secretA.type, secretA.rule)]
 
                 valuesA = vars(secretA)
                 valuesA.pop('secret_value')
@@ -298,7 +344,20 @@ class SecretsCollection:
             if filename not in self.files:
                 continue
 
-            output[filename] = self[filename] - other[filename]
+            # Secrets loaded from older baselines don't know which rule produced
+            # them, so they cover any scanned secret with matching content and
+            # plugin (type), regardless of rule.
+            unknown_rule_secrets = {
+                (secret.secret_hash, secret.type)
+                for secret in other[filename]
+                if secret.rule == UNKNOWN_RULE
+            }
+            output[filename] = {
+                secret
+                for secret in self[filename]
+                if secret not in other[filename]
+                and (secret.secret_hash, secret.type) not in unknown_rule_secrets
+            }
 
         for filename in self.files:
             if filename in other.files:

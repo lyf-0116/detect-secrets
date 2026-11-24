@@ -4,6 +4,7 @@ from unittest import mock
 import pytest
 
 from detect_secrets.core.secrets_collection import SecretsCollection
+from detect_secrets.core.potential_secret import UNKNOWN_RULE
 from detect_secrets.settings import get_settings
 from detect_secrets.settings import transient_settings
 from testing.factories import potential_secret_factory
@@ -212,6 +213,51 @@ def test_merge():
         index += 1
 
 
+def test_merge_with_unknown_rule_provenance():
+    """Labels from legacy baseline entries (without rule provenance) should be
+    carried over to scanned secrets, matching on content and plugin alone."""
+    new_secret = potential_secret_factory(rule='some-rule')
+    new_secrets = SecretsCollection()
+    new_secrets['filename'].add(new_secret)
+
+    old_secret = potential_secret_factory(is_secret=False, is_verified=True)
+    old_secret.rule = UNKNOWN_RULE
+    old_secrets = SecretsCollection()
+    old_secrets['filename'].add(old_secret)
+
+    new_secrets.merge(old_secrets)
+
+    assert new_secret.is_secret is False
+    assert new_secret.is_verified is True
+
+
+def test_merge_unknown_rule_does_not_cross_plugins():
+    """Legacy entries only match scanned secrets from the same plugin (type)."""
+    new_secret = potential_secret_factory(type='A', rule='some-rule')
+    new_secrets = SecretsCollection()
+    new_secrets['filename'].add(new_secret)
+
+    old_secret = potential_secret_factory(type='B', is_secret=False)
+    old_secret.rule = UNKNOWN_RULE
+    old_secrets = SecretsCollection()
+    old_secrets['filename'].add(old_secret)
+
+    new_secrets.merge(old_secrets)
+
+    assert new_secret.is_secret is None
+
+
+def test_dedup_respects_rule_provenance():
+    """Same content reported by different rules of the same plugin is kept
+    as distinct entries; same rule is deduplicated."""
+    secrets = SecretsCollection()
+    secrets['filename'].add(potential_secret_factory(rule='ruleA'))
+    secrets['filename'].add(potential_secret_factory(rule='ruleB'))
+    secrets['filename'].add(potential_secret_factory(rule='ruleA'))
+
+    assert len(secrets['filename']) == 2
+
+
 class TestTrim:
     @staticmethod
     def test_deleted_secret():
@@ -282,7 +328,55 @@ class TestTrim:
 
         secrets.trim(results)
 
+        # Entries loaded without rule provenance are marked as coming from an
+        # unknown source.
+        for secret_list in base_state.values():
+            for item in secret_list:
+                item['rule'] = UNKNOWN_RULE
+
         assert secrets.json() == base_state
+
+    @staticmethod
+    def test_migrates_unknown_rule_provenance():
+        """Legacy entries should adopt the rule reported by the latest scan,
+        while keeping their labels."""
+        old_secret = potential_secret_factory(is_secret=False)
+        old_secret.rule = UNKNOWN_RULE
+        secrets = SecretsCollection()
+        secrets['filename'].add(old_secret)
+
+        scanned_secret = potential_secret_factory(rule='some-rule', line_number=2)
+        scanned_results = SecretsCollection()
+        scanned_results['filename'].add(scanned_secret)
+
+        secrets.trim(scanned_results)
+
+        assert len(secrets['filename']) == 1
+        secret = next(iter(secrets['filename']))
+        assert secret.rule == 'some-rule'
+        assert secret.line_number == 2
+        assert secret.is_secret is False
+
+    @staticmethod
+    def test_migrates_unknown_rule_provenance_to_multiple_rules():
+        """A single legacy entry can correspond to several rules in the new
+        format. It should be split, so that no rule-level hit is reported as
+        new on the next scan."""
+        old_secret = potential_secret_factory(is_secret=False)
+        old_secret.rule = UNKNOWN_RULE
+        secrets = SecretsCollection()
+        secrets['filename'].add(old_secret)
+
+        scanned_results = SecretsCollection()
+        scanned_results['filename'].add(potential_secret_factory(rule='ruleA'))
+        scanned_results['filename'].add(potential_secret_factory(rule='ruleB'))
+
+        secrets.trim(scanned_results)
+
+        assert len(secrets['filename']) == 2
+        assert {secret.rule for secret in secrets['filename']} == {'ruleA', 'ruleB'}
+        for secret in secrets['filename']:
+            assert secret.is_secret is False
 
     @staticmethod
     def test_remove_non_existent_files():
@@ -377,6 +471,32 @@ class TestSubtraction:
         result = secrets - baseline
         assert len(result[str(Path('test_data/each_secret.py'))]) == 3
         assert len(secrets[str(Path('test_data/each_secret.py'))]) == 5
+
+    @staticmethod
+    def test_unknown_rule_provenance_covers_scanned_secrets():
+        """Legacy baseline entries (without rule provenance) cover scanned
+        secrets with matching content and plugin, regardless of rule."""
+        secrets = SecretsCollection()
+        secrets['filename'].add(potential_secret_factory(rule='some-rule'))
+
+        baseline_secret = potential_secret_factory()
+        baseline_secret.rule = UNKNOWN_RULE
+        baseline = SecretsCollection()
+        baseline['filename'].add(baseline_secret)
+
+        assert not (secrets - baseline)
+
+    @staticmethod
+    def test_unknown_rule_provenance_does_not_cover_other_plugins():
+        secrets = SecretsCollection()
+        secrets['filename'].add(potential_secret_factory(type='A', rule='some-rule'))
+
+        baseline_secret = potential_secret_factory(type='B')
+        baseline_secret.rule = UNKNOWN_RULE
+        baseline = SecretsCollection()
+        baseline['filename'].add(baseline_secret)
+
+        assert secrets - baseline
 
     @staticmethod
     def test_no_overlapping_files(configure_plugins):

@@ -31,6 +31,7 @@ from typing import Generator
 from typing import Optional
 from typing import Pattern
 from typing import Set
+from typing import Tuple
 
 from ..core.potential_secret import PotentialSecret
 from ..util.filetype import determine_file_type
@@ -281,6 +282,18 @@ class KeywordDetector(BasePlugin):
         string: str,
         denylist_regex_to_group: Optional[Dict[Pattern, int]] = None,
     ) -> Generator[str, None, None]:
+        for _, secret in self.analyze_string_with_rule(
+            string,
+            denylist_regex_to_group=denylist_regex_to_group,
+        ):
+            yield secret
+
+    def analyze_string_with_rule(
+        self,
+        string: str,
+        denylist_regex_to_group: Optional[Dict[Pattern, int]] = None,
+        **kwargs: Any,
+    ) -> Generator[Tuple[str, str], None, None]:
         if self.keyword_exclude and self.keyword_exclude.search(string):
             return
 
@@ -297,7 +310,7 @@ class KeywordDetector(BasePlugin):
                 match = denylist_regex.search(string)
                 if match:
                     has_results = True
-                    yield match.group(group_number)
+                    yield denylist_regex.pattern, match.group(group_number)
 
             if has_results:
                 break

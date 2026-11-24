@@ -9,6 +9,14 @@ from ..util.color import colorize
 from ..util.path import convert_local_os_path
 
 
+# Marker used for the `rule` of secrets loaded from baselines that predate
+# rule provenance. Since we cannot know which rule produced these hits, they
+# are excluded from rule-level deduplication, and are only matched to fresh
+# scan results through the (filename, secret_hash, type) fallback logic in
+# SecretsCollection.
+UNKNOWN_RULE = 'unknown'
+
+
 class PotentialSecret:
     """This custom data type represents a string found, matching the
     plugin rules defined in SecretsCollection, that has the potential
@@ -30,6 +38,7 @@ class PotentialSecret:
         line_number: int = 0,
         is_secret: Optional[bool] = None,
         is_verified: bool = False,
+        rule: Optional[str] = None,
     ) -> None:
         """
         :param type: human-readable secret type, defined by the plugin
@@ -40,6 +49,10 @@ class PotentialSecret:
             Merely used as a reference for easy triage.
         :param is_secret: whether or not the secret is a true- or false- positive
         :param is_verified: whether the secret has been externally verified
+        :param rule: identifier of the rule (within the plugin) that produced
+            this hit. e.g. the regex pattern that matched. Secrets loaded from
+            older baselines that lack this information are marked with
+            UNKNOWN_RULE.
         """
         self.type = type
         self.filename = filename
@@ -47,11 +60,12 @@ class PotentialSecret:
         self.set_secret(secret)
         self.is_secret = is_secret
         self.is_verified = is_verified
+        self.rule = rule
 
         # If two PotentialSecrets have the same values for these fields,
         # they are considered equal. Note that line numbers aren't included
         # in this, because line numbers are subject to change.
-        self.fields_to_compare = ['filename', 'secret_hash', 'type']
+        self.fields_to_compare = ['filename', 'secret_hash', 'type', 'rule']
 
     def set_secret(self, secret: str) -> None:
         self.secret_hash: str = self.hash_secret(secret)
@@ -89,6 +103,11 @@ class PotentialSecret:
             if parameter in data:
                 kwargs[parameter] = data[parameter]
 
+        # Baselines written before rule provenance was tracked won't have this
+        # field. Mark them as coming from an unknown source, so that they don't
+        # participate in rule-level deduplication.
+        kwargs['rule'] = str(data['rule']) if 'rule' in data else UNKNOWN_RULE
+
         output = cls(**kwargs)
         output.secret_value = None
         output.secret_hash = str(data['hashed_secret'])
@@ -109,6 +128,9 @@ class PotentialSecret:
 
         if hasattr(self, 'is_secret') and self.is_secret is not None:
             attributes['is_secret'] = self.is_secret
+
+        if self.rule is not None:
+            attributes['rule'] = self.rule
 
         return attributes
 

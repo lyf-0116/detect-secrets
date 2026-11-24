@@ -15,6 +15,7 @@ from typing import Generator
 from typing import Iterable
 from typing import Pattern
 from typing import Set
+from typing import Tuple
 
 import requests
 
@@ -43,6 +44,25 @@ class BasePlugin(metaclass=ABCMeta):
         """Yields all the raw secret values within a supplied string."""
         raise NotImplementedError
 
+    def analyze_string_with_rule(
+        self,
+        string: str,
+        **kwargs: Any,
+    ) -> Generator[Tuple[str, str], None, None]:
+        """Yields (rule, secret) pairs for all raw secret values within a supplied
+        string, where rule identifies which of the plugin's rules produced the hit.
+
+        Plugins that are backed by multiple rules should override this (and implement
+        `analyze_string` in terms of it) so that scan results retain their provenance.
+        """
+        for match in self.analyze_string(string, **kwargs):
+            yield self.default_rule_id, match
+
+    @property
+    def default_rule_id(self) -> str:
+        """Used as the rule identifier for plugins that only have a single, implicit rule."""
+        return self.__class__.__name__
+
     def analyze_line(
         self,
         filename: str,
@@ -53,7 +73,7 @@ class BasePlugin(metaclass=ABCMeta):
     ) -> Set[PotentialSecret]:
         """This examines a line and finds all possible secret values in it."""
         output = set()
-        for match in self.analyze_string(line, **kwargs):
+        for rule, match in self.analyze_string_with_rule(line, **kwargs):
             is_verified: bool = False
             # If the filter is disabled it means --no-verify flag was passed
             # We won't run verification in that case
@@ -78,6 +98,7 @@ class BasePlugin(metaclass=ABCMeta):
                     secret=match,
                     line_number=line_number,
                     is_verified=is_verified,
+                    rule=rule,
                 ),
             )
 
@@ -164,14 +185,22 @@ class RegexBasedDetector(BasePlugin, metaclass=ABCMeta):
         raise NotImplementedError
 
     def analyze_string(self, string: str) -> Generator[str, None, None]:
+        for _, match in self.analyze_string_with_rule(string):
+            yield match
+
+    def analyze_string_with_rule(
+        self,
+        string: str,
+        **kwargs: Any,
+    ) -> Generator[Tuple[str, str], None, None]:
         for regex in self.denylist:
             for match in regex.findall(string):
                 if isinstance(match, tuple):
                     for submatch in filter(bool, match):
                         # It might make sense to paste break after yielding
-                        yield submatch
+                        yield regex.pattern, submatch
                 else:
-                    yield match
+                    yield regex.pattern, match
 
     @staticmethod
     def build_assignment_regex(
