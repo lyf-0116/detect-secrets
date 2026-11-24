@@ -3,6 +3,7 @@ from unittest import mock
 
 import pytest
 
+from detect_secrets.core.secrets_collection import MIN_CONTENT_LENGTH_FOR_LABEL_MATCH
 from detect_secrets.core.secrets_collection import SecretsCollection
 from detect_secrets.settings import get_settings
 from detect_secrets.settings import transient_settings
@@ -210,6 +211,171 @@ def test_merge():
             assert secret.is_verified is False
 
         index += 1
+
+
+class TestMergeContentBasedLabelMatching:
+    """
+    Human labels (e.g. `is_secret`) are judgements about a finding's content, and
+    outlive the results they were attached to. When results are regenerated (e.g.
+    after a version upgrade renames a detector), labels should re-attach by content
+    and path, rather than silently reverting to unlabelled.
+    """
+
+    @staticmethod
+    def _old_collection_with(secret):
+        return SecretsCollection.load_from_baseline({
+            'results': {
+                secret.filename: [secret.json()],
+            },
+        })
+
+    @staticmethod
+    def _new_collection_with(*secrets):
+        output = SecretsCollection()
+        for secret in secrets:
+            output[secret.filename] = output[secret.filename] | {secret}
+
+        return output
+
+    def test_labels_survive_detector_rename_and_line_moves(self):
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            line_number=1,
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secret = potential_secret_factory(
+            type='NewDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            line_number=5,
+        )
+        new_secrets = self._new_collection_with(new_secret)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secret.is_secret is False
+
+    def test_labels_do_not_cross_match_short_content(self):
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * (MIN_CONTENT_LENGTH_FOR_LABEL_MATCH - 1),
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secret = potential_secret_factory(
+            type='NewDetector',
+            secret='x' * (MIN_CONTENT_LENGTH_FOR_LABEL_MATCH - 1),
+        )
+        new_secrets = self._new_collection_with(new_secret)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secret.is_secret is None
+
+    def test_label_applies_to_all_identical_content_in_same_file(self):
+        # This is the documented trade-off of content-based matching: without the
+        # detector type, identical content in the same file is indistinguishable.
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secretA = potential_secret_factory(
+            type='NewDetectorA',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+        )
+        new_secretB = potential_secret_factory(
+            type='NewDetectorB',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+        )
+        new_secrets = self._new_collection_with(new_secretA, new_secretB)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secretA.is_secret is False
+        assert new_secretB.is_secret is False
+
+    def test_newer_labels_are_not_overridden(self):
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secret = potential_secret_factory(
+            type='NewDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_secret=True,
+        )
+        new_secrets = self._new_collection_with(new_secret)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secret.is_secret is True
+
+    def test_is_verified_survives_detector_rename(self):
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_verified=True,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secret = potential_secret_factory(
+            type='NewDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+        )
+        new_secrets = self._new_collection_with(new_secret)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secret.is_verified is True
+
+    def test_no_content_match_without_secret_value(self):
+        # Loaded baselines only carry hashes, so if neither side knows the
+        # plaintext, we cannot tell whether the content is distinctive enough.
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secrets = self._old_collection_with(
+            potential_secret_factory(
+                type='NewDetector',
+                secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            ),
+        )
+
+        new_secrets.merge(old_secrets)
+
+        assert list(new_secrets)[0][1].is_secret is None
+
+    def test_labels_do_not_cross_files(self):
+        old_secret = potential_secret_factory(
+            type='OldDetector',
+            filename='other_file',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+            is_secret=False,
+        )
+        old_secrets = self._old_collection_with(old_secret)
+
+        new_secret = potential_secret_factory(
+            type='NewDetector',
+            secret='x' * MIN_CONTENT_LENGTH_FOR_LABEL_MATCH,
+        )
+        new_secrets = self._new_collection_with(new_secret)
+
+        new_secrets.merge(old_secrets)
+
+        assert new_secret.is_secret is None
 
 
 class TestTrim:

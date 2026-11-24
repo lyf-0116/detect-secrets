@@ -16,6 +16,21 @@ from detect_secrets.settings import configure_settings_from_baseline
 from detect_secrets.settings import get_settings
 
 
+# Human labels (e.g. `is_secret`) are judgements that a person made about a finding.
+# They outlive the results they were originally attached to: results are regenerated
+# on every scan, and their shape may change across versions (e.g. a detector is
+# renamed), but the judgement about the underlying content still stands. To honour
+# that longer lifecycle, labels are re-attached by content features and path alone
+# (see `SecretsCollection.merge`), rather than by version-specific attributes such
+# as the detector type.
+#
+# The trade-off is that identical content appearing in multiple places of the same
+# file inherits the same label. To limit the blast radius of this content-based
+# matching, it only applies to secrets whose content is long enough to be
+# considered distinctive.
+MIN_CONTENT_LENGTH_FOR_LABEL_MATCH = 8
+
+
 class PatchedFile:
     """This exists so that we can do typecasting, without importing unidiff."""
     path: str
@@ -98,6 +113,13 @@ class SecretsCollection:
 
         Therefore, this function serves to extract this information from the old results,
         and amend the new results with it.
+
+        Matching is done in two passes: first by exact result identity (which includes
+        the detector type), then by content and path alone. The second pass decouples
+        human labels from version-specific attributes, so they still attach when a
+        detector is renamed or repositioned between versions -- at the cost of
+        labelling all identical content in the same file alike (see
+        MIN_CONTENT_LENGTH_FOR_LABEL_MATCH).
         """
         for filename in old_results.files:
             if filename not in self.files:
@@ -120,6 +142,11 @@ class SecretsCollection:
                 # If the old value is false, it won't make a difference.
                 if not mapping[old_secret].is_verified:
                     mapping[old_secret].is_verified = old_secret.is_verified
+
+            _inherit_labels_by_content(
+                old_secrets=old_results.data[filename],
+                new_secrets=self.data[filename],
+            )
 
     def trim(
         self,
@@ -316,3 +343,63 @@ class SecretsCollection:
 def _scan_file_and_serialize(filename: str) -> List[PotentialSecret]:
     """Used for multiprocessing, since lambdas can't be serialized."""
     return list(scan.scan_file(filename))
+
+
+def _inherit_labels_by_content(
+    old_secrets: Set[PotentialSecret],
+    new_secrets: Set[PotentialSecret],
+) -> None:
+    """
+    Re-attaches human labels (e.g. `is_secret`) to results describing the same
+    content in the same file, without relying on version-specific attributes
+    (e.g. the detector type, which may be renamed between versions).
+
+    Note that this intentionally applies a label to *all* results with matching
+    content in the file, since they are indistinguishable without the detector type.
+
+    This is only a fallback: results whose identity survived the regeneration keep
+    their exact-match behaviour.
+    """
+    labelled_secrets: Dict[str, PotentialSecret] = {}
+    for old_secret in old_secrets:
+        if old_secret.is_secret is None and not old_secret.is_verified:
+            continue
+
+        labelled_secrets.setdefault(old_secret.secret_hash, old_secret)
+
+    if not labelled_secrets:
+        return
+
+    old_identities = set(old_secrets)
+    for new_secret in new_secrets:
+        if new_secret in old_identities:
+            continue
+
+        labelled_secret = labelled_secrets.get(new_secret.secret_hash)
+        if not labelled_secret:
+            continue
+
+        if not _is_distinctive_enough_for_label_match(new_secret, labelled_secret):
+            continue
+
+        # Only override if there's no newer value.
+        if new_secret.is_secret is None:
+            new_secret.is_secret = labelled_secret.is_secret
+
+        # If the old value is false, it won't make a difference.
+        if not new_secret.is_verified:
+            new_secret.is_verified = labelled_secret.is_verified
+
+
+def _is_distinctive_enough_for_label_match(
+    new_secret: PotentialSecret,
+    old_secret: PotentialSecret,
+) -> bool:
+    # Loaded baselines only store hashes, so the plaintext value may be unavailable.
+    # Without it, we cannot tell whether the content is distinctive enough to safely
+    # match on content alone, so we conservatively refuse.
+    secret_value = new_secret.secret_value or old_secret.secret_value
+    if not secret_value:
+        return False
+
+    return len(secret_value) >= MIN_CONTENT_LENGTH_FOR_LABEL_MATCH

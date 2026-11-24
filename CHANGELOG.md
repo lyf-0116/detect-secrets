@@ -25,6 +25,16 @@ If you love `detect-secrets`, please star our project on GitHub to show your sup
 [@xxxx]: https://github.com/xxxx
 -->
 
+#### :bug: Bugfixes
+- Human labels recorded during audits (e.g. `is_secret`) now survive baseline
+  refreshes (`scan --baseline`) even when a result's detector type no longer
+  matches -- e.g. after a detector is renamed between versions. Labels are
+  re-attached by content and path (rather than by version-specific attributes),
+  so previously reviewed findings no longer silently revert to unlabelled.
+  Content-based matching only applies to secrets of at least
+  `MIN_CONTENT_LENGTH_FOR_LABEL_MATCH` characters, since identical content in
+  the same file can no longer be distinguished without the detector type.
+
 ### v1.5.0
 ##### May 6th, 2024
 
